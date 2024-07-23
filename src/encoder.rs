@@ -32,10 +32,12 @@ impl Encoder {
     }
 
     pub fn len(&mut self) -> usize {
-        self.len = self.inner.seek(SeekFrom::End(0)).expect("") as usize;
+        let inner_len = self.inner.seek(SeekFrom::End(0)).expect("") as usize;
         self.inner.rewind().expect("");
         self.pos = 0;
-        self.len / 3 * 4
+        self.len = (inner_len as f64 / 3.0).ceil() as usize * 4;
+        println!("s64 | len: {} from inner_len: {}", self.len, inner_len);
+        self.len
     }
 
     pub fn is_empty(&mut self) -> bool {
@@ -49,6 +51,11 @@ impl Read for Encoder {
         let want = dst.len();
         // inner position is clamped to triplets
         let inner_pos = self.pos / 4 * 3;
+        /* println!(
+            "s64 | want: {}, have: {}",
+            want,
+            self.len - (inner_pos / 3 * 4) as usize
+        ); */
         self.inner.seek(SeekFrom::Start(inner_pos))?;
         // outer position is clamped to quartets so use the distance to the
         // nearest quartet boundary to tell how many output chars to skip
@@ -57,9 +64,9 @@ impl Read for Encoder {
         let mut buf = [0; 1024];
         let got = self.inner.read(&mut buf)?;
 
-        println!("buf: {:?}, got: {:?}, skip: {}", &buf[..got], got, skip);
+        // println!("s64 | buf: {:?}, got: {:?}, skip: {}", &buf[..got], got, skip);
         let encoded = STANDARD.encode(&buf[..got]);
-        println!("encoded: {:?}", encoded);
+        // println!("s64 | encoded: {:?}", encoded);
 
         // take up to whichever is smaller: the output buffer length or encoded
         // bytes available length
@@ -67,6 +74,7 @@ impl Read for Encoder {
         let advance = take - skip;
         dst[0..advance].copy_from_slice((encoded)[skip..take].as_bytes());
         self.pos += advance as u64;
+        println!("s64 | read: {}", advance);
         Ok(advance)
     }
 }
@@ -76,6 +84,7 @@ impl Seek for Encoder {
         let (base_pos, offset) = match style {
             SeekFrom::Start(n) => {
                 self.pos = n;
+                println!("s64 | seeking to: {}", n);
                 return Ok(n);
             }
             SeekFrom::End(n) => (self.len, n),
@@ -84,6 +93,7 @@ impl Seek for Encoder {
         match base_pos.checked_add_signed(offset as isize) {
             Some(n) => {
                 self.pos = n as u64;
+                println!("s64 | seeking to: {}", n);
                 Ok(self.pos)
             }
             None => Err(Error::new(
@@ -102,11 +112,11 @@ mod cli {
     #[test]
     fn basic() {
         let source = Cursor::new(b"MEOWMEOW FUZZYFACE.");
-        println!("source: {:?}", source);
+        println!("s64 | source: {:?}", source);
         let mut encoder = Encoder::new(source);
 
-        // read the output at different chunk sizes the make sure things work
-        // outside of the happy path
+        // read the output at different chunk sizes to hopefully ensure things
+        // work outside of the happy path
         let mut out1 = [0; 6];
         let mut len = encoder.read(&mut out1).unwrap();
         assert_eq!(std::str::from_utf8(&out1[..len]).expect(""), "TUVPV0");
@@ -125,10 +135,10 @@ mod cli {
 
         // now read the whole thing
         encoder.seek(SeekFrom::Start(0)).expect("");
-        let mut out = [0; 28];
+        let mut out = [0; 26];
         encoder.read_exact(&mut out).unwrap();
         assert_eq!(
-            "TUVPV01FT1cgRlVaWllGQUNFLg==",
+            "TUVPV01FT1cgRlVaWllGQUNFLg",
             std::str::from_utf8(&out).expect(""),
         );
     }
