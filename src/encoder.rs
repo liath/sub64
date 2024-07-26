@@ -48,7 +48,6 @@ impl Encoder {
 //
 impl Read for Encoder {
     fn read(&mut self, dst: &mut [u8]) -> io::Result<usize> {
-        let want = dst.len();
         // inner position is clamped to triplets
         let inner_pos = self.pos / 4 * 3;
         /* println!(
@@ -59,22 +58,32 @@ impl Read for Encoder {
         self.inner.seek(SeekFrom::Start(inner_pos))?;
         // outer position is clamped to quartets so use the distance to the
         // nearest quartet boundary to tell how many output chars to skip
-        let skip = (self.pos - (inner_pos / 3 * 4)) as usize;
+        let mut skip = (self.pos - (inner_pos / 3 * 4)) as usize;
 
-        let mut buf = [0; 1024];
-        let got = self.inner.read(&mut buf)?;
+        let mut want = dst.len();
+        while want > 0 {
+            let mut triplet = [0; 3];
+            let got = self.inner.read(&mut triplet)?;
+            if got == 0 {
+                break;
+            }
 
-        // println!("s64 | buf: {:?}, got: {:?}, skip: {}", &buf[..got], got, skip);
-        let encoded = STANDARD.encode(&buf[..got]);
-        // println!("s64 | encoded: {:?}", encoded);
+            let mut quartet = [0; 4];
+            let _ = STANDARD.encode_slice(&triplet[..got], &mut quartet);
+            let take = min(4 - skip, want);
+            let at = dst.len() - want;
+            let max = min(at + take, dst.len());
+            /* println!(
+                "want: {}, take: {}, at: {}, max: {}, skip: {}",
+                want, take, at, max, skip
+            ); */
+            dst[at..max].copy_from_slice(&(quartet[skip..skip + take]));
+            skip = 0;
+            want -= take;
+        }
 
-        // take up to whichever is smaller: the output buffer length or encoded
-        // bytes available length
-        let take = min(encoded.len(), want + skip);
-        let advance = take - skip;
-        dst[0..advance].copy_from_slice((encoded)[skip..take].as_bytes());
+        let advance = dst.len() - want;
         self.pos += advance as u64;
-        println!("s64 | read: {}", advance);
         Ok(advance)
     }
 }
@@ -84,7 +93,7 @@ impl Seek for Encoder {
         let (base_pos, offset) = match style {
             SeekFrom::Start(n) => {
                 self.pos = n;
-                println!("s64 | seeking to: {}", n);
+                // println!("s64 | seeking to: {}", n);
                 return Ok(n);
             }
             SeekFrom::End(n) => (self.len, n),
@@ -93,7 +102,7 @@ impl Seek for Encoder {
         match base_pos.checked_add_signed(offset as isize) {
             Some(n) => {
                 self.pos = n as u64;
-                println!("s64 | seeking to: {}", n);
+                // println!("s64 | seeking to: {}", n);
                 Ok(self.pos)
             }
             None => Err(Error::new(
